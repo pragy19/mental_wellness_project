@@ -56,17 +56,34 @@ def get_questions():
             "Generate 3 short stigma-related self-reflection questions for young Indian students. "
             "Keep them easy to answer with Yes/No/Maybe. Return as a numbered list."
         )
-        text = generate_with_gemini(prompt)
-        lines = [line.strip("0123456789. -") for line in text.splitlines() if line.strip()]
-        questions = [q for q in lines if len(q) > 5][:3]
-        if len(questions) < 3:
+        try:
+            text = generate_with_gemini(prompt)
+            print(f"[DEBUG] Gemini AI raw response:\n{text}\n")  # ✅ log AI output
+            # Extract questions safely
+            lines = [line.strip("0123456789. -") for line in text.splitlines() if line.strip()]
+            questions = [q for q in lines if len(q) > 5][:3]
+
+            if len(questions) < 3:
+                print("[WARNING] Gemini AI returned fewer than 3 questions, using default set.")
+                questions = [
+                    "Do you avoid sharing feelings because of judgment?",
+                    "Have you ever felt ashamed asking for mental health help?",
+                    "Do you think seeking help is a weakness?"
+                ]
+
+            daily_cache[today] = {"questions": questions}
+
+        except Exception as e:
+            print(f"[ERROR] Failed to generate questions: {e}")
             questions = [
                 "Do you avoid sharing feelings because of judgment?",
                 "Have you ever felt ashamed asking for mental health help?",
                 "Do you think seeking help is a weakness?"
             ]
-        daily_cache[today] = {"questions": questions}
+            daily_cache[today] = {"questions": questions}
+
     return jsonify({"questions": daily_cache[today]["questions"]})
+
 
 @app.route("/get_scenario", methods=["GET"])
 def get_scenario():
@@ -142,3 +159,4 @@ def home():
 # --- Run App ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+
