@@ -18,14 +18,14 @@ def reset_state():
 if "page" not in st.session_state:
     st.session_state.page = "landing"
 
-# --- Landing page: reverse psychology challenge ---
+# --- Landing page ---
 if st.session_state.page == "landing":
     st.markdown("<div style='text-align:center; padding:20px;'>", unsafe_allow_html=True)
     st.title("🌱 Most people won't click this...")
     st.subheader("Think you're fine? Prove it. (Or just be curious.)")
     st.markdown("</div>", unsafe_allow_html=True)
-
     st.markdown("**No sign-up — anonymous.** Just a few minutes to check-in and try a roleplay.")
+
     if st.button("Take the Challenge 🚀"):
         st.session_state.page = "questions"
 
@@ -33,12 +33,25 @@ if st.session_state.page == "landing":
 elif st.session_state.page == "questions":
     st.header("📝 Daily Stigma Check")
 
+    questions = []
     try:
         res = requests.get(f"{BACKEND_URL}/get_questions", timeout=6)
         res.raise_for_status()
-        questions = res.json().get("questions", [])
-    except Exception:
-        st.warning("⚠️ Could not fetch today's questions. Using default set.")
+        data = res.json()
+        questions = data.get("questions", [])
+
+        if not questions or len(questions) < 3:
+            st.warning("⚠️ AI returned incomplete questions. Using default set.")
+            questions = [
+                "Do you avoid talking about how you feel because of others?",
+                "Have you felt judged for needing help with stress?",
+                "Do you think admitting you struggle is weak?"
+            ]
+        else:
+            st.success("✅ Daily AI-generated questions loaded!")
+
+    except Exception as e:
+        st.error(f"❌ Could not fetch today's questions: {e}")
         questions = [
             "Do you avoid talking about how you feel because of others?",
             "Have you felt judged for needing help with stress?",
@@ -66,11 +79,20 @@ elif st.session_state.page == "questions":
 elif st.session_state.page == "roleplay":
     st.header("🎭 Daily Roleplay")
 
+    scenario = ""
     try:
         r = requests.get(f"{BACKEND_URL}/get_scenario", timeout=6)
         r.raise_for_status()
         scenario = r.json().get("scenario", "")
-    except Exception:
+
+        if not scenario:
+            st.warning("⚠️ AI returned empty scenario. Using default scenario.")
+            scenario = "A friend says 'You're making a big deal of nothing' when you open up about stress. How would you reply?"
+        else:
+            st.success("✅ Daily AI-generated scenario loaded!")
+
+    except Exception as e:
+        st.error(f"❌ Could not fetch scenario: {e}")
         scenario = "A friend says 'You're making a big deal of nothing' when you open up about stress. How would you reply?"
 
     st.write("**Scenario:**")
@@ -95,8 +117,8 @@ elif st.session_state.page == "roleplay":
                 st.session_state.ai_reflection = data.get("ai_reflection", "")
                 st.session_state.ai_tip = data.get("ai_tip", "")
                 st.session_state.page = "reflection"
-            except Exception:
-                st.error("❌ AI feedback currently unavailable. Please try again later.")
+            except Exception as e:
+                st.error(f"❌ AI feedback currently unavailable. Error: {e}")
 
 # --- Reflection page ---
 elif st.session_state.page == "reflection":
@@ -104,7 +126,7 @@ elif st.session_state.page == "reflection":
     st.write(f"**Your stigma level:** {st.session_state.get('stigma_level', 'Unknown')}")
 
     st.subheader("AI Reflection")
-    st.write(st.session_state.get("ai_reflection", ""))
+    st.write(st.session_state.get("ai_reflection", "I hear you — it takes courage to share this."))
 
     st.subheader("Try this")
     st.success(st.session_state.get("ai_tip", "Try a short breathing exercise: 4-4-4."))
