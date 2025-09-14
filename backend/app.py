@@ -5,53 +5,49 @@ from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# Load environment variables (if using .env)
+# Load env variables
 load_dotenv()
-
-# Set Gemini API key (get from https://aistudio.google.com/app/apikey)
-API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
+API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=API_KEY)
 
-# Model selection
 MODEL_NAME = "gemini-1.5-flash"
-
 app = Flask(__name__)
+daily_cache = {}  # in-memory cache
 
-# Simple in-memory cache (per day)
-daily_cache = {}
-
-# Sanitizer helper
+# --- Helpers ---
 def sanitize_text(text, max_len=800):
     if not text:
         return ""
     text = text.strip()
     if len(text) > max_len:
         text = text[:max_len]
-    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', ' ', text)
-    return text
+    return re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', ' ', text)
 
 def generate_with_gemini(prompt, max_output_tokens=200):
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
-        return sanitize_text(response.text)
+        if hasattr(response, "text") and response.text:
+            return sanitize_text(response.text)
+        elif response.candidates and response.candidates[0].content.parts:
+            return sanitize_text(response.candidates[0].content.parts[0].text)
+        else:
+            return "[AI error: empty response]"
     except Exception as e:
         print("Gemini call failed:", e)
         return "[AI error: unable to generate text right now]"
 
 # --- Endpoints ---
-
-# Daily questions
 @app.route("/get_questions", methods=["GET"])
 def get_questions():
     today = str(datetime.date.today())
     if today not in daily_cache:
         prompt = (
             "Generate 3 short stigma-related self-reflection questions for young Indian students. "
-            "Keep them easy to answer with Yes/No/Maybe. Return as a numbered list."
+            "Keep them answerable with Yes/No/Maybe. Return as a numbered list."
         )
         text = generate_with_gemini(prompt)
-        lines = [line.strip("0123456789. -") for line in text.splitlines() if line.strip()]
+        lines = [re.sub(r'^\d+[\).\s-]*', '', line).strip() for line in text.splitlines() if line.strip()]
         questions = [q for q in lines if len(q) > 5][:3]
         if len(questions) < 3:
             questions = [
@@ -62,7 +58,6 @@ def get_questions():
         daily_cache[today] = {"questions": questions}
     return jsonify({"questions": daily_cache[today]["questions"]})
 
-# Daily scenario
 @app.route("/get_scenario", methods=["GET"])
 def get_scenario():
     today = str(datetime.date.today())
@@ -79,7 +74,6 @@ def get_scenario():
         daily_cache[key] = {"scenario": scenario}
     return jsonify({"scenario": daily_cache[key]["scenario"]})
 
-# Compute stigma score
 @app.route("/stigma_score", methods=["POST"])
 def stigma_score():
     data = request.get_json() or {}
@@ -91,8 +85,6 @@ def stigma_score():
             score += 2
         elif s in ("maybe", "sometimes"):
             score += 1
-        else:
-            score += 0
     if score <= 2:
         level = "Low"
     elif score <= 4:
@@ -101,7 +93,6 @@ def stigma_score():
         level = "High"
     return jsonify({"stigma_level": level, "raw_score": score})
 
-# Ask AI for feedback
 @app.route("/ask_ai", methods=["POST"])
 def ask_ai():
     data = request.get_json() or {}
@@ -124,10 +115,10 @@ def ask_ai():
     ai_text = generate_with_gemini(prompt)
     reflection, tip = "", ""
     for line in ai_text.splitlines():
-        if line.lower().startswith("reflection"):
-            reflection = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("tip"):
-            tip = line.split(":", 1)[1].strip()
+        if "reflection" in line.lower():
+            reflection = line.split(":", 1)[-1].strip()
+        elif "tip" in line.lower():
+            tip = line.split(":", 1)[-1].strip()
     if not reflection:
         reflection = "I hear you — it takes courage to share this."
     if not tip:
@@ -136,4 +127,4 @@ def ask_ai():
     return jsonify({"ai_reflection": reflection, "ai_tip": tip, "raw_ai": ai_text})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
