@@ -1,18 +1,27 @@
 import os
 import datetime
 import re
+import tempfile
 from flask import Flask, request, jsonify
-from dotenv import load_dotenv
 import google.generativeai as genai
 
-# Load env variables
-load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=API_KEY)
+# --- Setup service account for Gemini / Vertex AI ---
+# Store the JSON content in Railway env variable: GOOGLE_APPLICATION_CREDENTIALS_JSON
+json_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+if not json_creds:
+    raise ValueError("GOOGLE_APPLICATION_CREDENTIALS_JSON is not set!")
 
+# Write the JSON to a temporary file and set GOOGLE_APPLICATION_CREDENTIALS
+creds_file = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+creds_file.write(json_creds.encode())
+creds_file.close()
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_file.name
+
+# Configure Gemini API (no API key needed)
 MODEL_NAME = "gemini-1.5-flash"
+
 app = Flask(__name__)
-daily_cache = {}  # in-memory cache
+daily_cache = {}  # In-memory per-day cache
 
 # --- Helpers ---
 def sanitize_text(text, max_len=800):
@@ -21,33 +30,34 @@ def sanitize_text(text, max_len=800):
     text = text.strip()
     if len(text) > max_len:
         text = text[:max_len]
-    return re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', ' ', text)
+    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f]', ' ', text)
+    return text
 
 def generate_with_gemini(prompt, max_output_tokens=200):
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         response = model.generate_content(prompt)
-        if hasattr(response, "text") and response.text:
-            return sanitize_text(response.text)
-        elif response.candidates and response.candidates[0].content.parts:
-            return sanitize_text(response.candidates[0].content.parts[0].text)
-        else:
-            return "[AI error: empty response]"
+        # Extract text safely
+        text = getattr(response, "text", None)
+        if not text and getattr(response, "candidates", None):
+            text = response.candidates[0].content.parts[0].text
+        return sanitize_text(text or "[AI error: empty response]")
     except Exception as e:
         print("Gemini call failed:", e)
-        return "[AI error: unable to generate text right now]"
+        return f"[AI error: {e}]"
 
 # --- Endpoints ---
+
 @app.route("/get_questions", methods=["GET"])
 def get_questions():
     today = str(datetime.date.today())
     if today not in daily_cache:
         prompt = (
             "Generate 3 short stigma-related self-reflection questions for young Indian students. "
-            "Keep them answerable with Yes/No/Maybe. Return as a numbered list."
+            "Keep them easy to answer with Yes/No/Maybe. Return as a numbered list."
         )
         text = generate_with_gemini(prompt)
-        lines = [re.sub(r'^\d+[\).\s-]*', '', line).strip() for line in text.splitlines() if line.strip()]
+        lines = [line.strip("0123456789. -") for line in text.splitlines() if line.strip()]
         questions = [q for q in lines if len(q) > 5][:3]
         if len(questions) < 3:
             questions = [
@@ -113,18 +123,22 @@ def ask_ai():
     )
 
     ai_text = generate_with_gemini(prompt)
-    reflection, tip = "", ""
-    for line in ai_text.splitlines():
-        if "reflection" in line.lower():
-            reflection = line.split(":", 1)[-1].strip()
-        elif "tip" in line.lower():
-            tip = line.split(":", 1)[-1].strip()
-    if not reflection:
-        reflection = "I hear you — it takes courage to share this."
-    if not tip:
-        tip = "Try writing your thoughts in a journal for 5 minutes today."
+
+    # Parse response safely using regex
+    import re
+    reflection_match = re.search(r"REFLECTION\s*:\s*(.*)", ai_text, re.IGNORECASE)
+    tip_match = re.search(r"TIP\s*:\s*(.*)", ai_text, re.IGNORECASE)
+
+    reflection = reflection_match.group(1).strip() if reflection_match else "I hear you — it takes courage to share this."
+    tip = tip_match.group(1).strip() if tip_match else "Try writing your thoughts in a journal for 5 minutes today."
 
     return jsonify({"ai_reflection": reflection, "ai_tip": tip, "raw_ai": ai_text})
 
+# Optional root route
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "Mental Wellness AI API is running. Use /get_questions, /get_scenario, /stigma_score, /ask_ai"})
+
+# --- Run App ---
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
